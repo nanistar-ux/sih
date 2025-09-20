@@ -1,62 +1,78 @@
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-import uvicorn
-import shutil
-from pathlib import Path
-import base64
-import tempfile
+import os, json, logging
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 
-from ai.ai_processor import process_file
+PORT = 5001
+API_KEY = "YOUR_SECRET_KEY_HERE"
 
-app = FastAPI(title="SIH2025_AI - FRA Claim Processor")
+ALLOWED = {
+    ("Ramesh","Arepally"), ("Lakshmi","Arepally"), ("Sita","Arepally"),
+    ("Arjun","Damera"), ("Bheema","Damera"), ("Sundari","Damera"),
+    ("Raju","Oglapur"), ("Kavya","Oglapur"), ("Lalitha","Oglapur"),
+    ("Bheema Rao","Oorugonda"), ("Sita Bai","Oorugonda"), ("Ramesh Koya","Oorugonda")
+}
 
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+DATA_PATH = os.path.join("data", "claims.json")
+os.makedirs("data", exist_ok=True)
 
-# 1️⃣ File Upload API (multipart/form-data)
-@app.post("/api/process_claim")
-async def process_claim(file: UploadFile = File(...)):
-    try:
-        file_path = UPLOAD_DIR / file.filename
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+app = Flask(__name__, template_folder="templates")
+CORS(app)
+logging.basicConfig(level=logging.INFO)
 
-        result = process_file(str(file_path))
-        return JSONResponse(content={"status": "success", "result": result})
+@app.route("/")
+def index():
+    return render_template("map.html")
 
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+@app.route("/api/claims", methods=["POST"])
+def receive_claims():
+    key = request.headers.get("x-api-key")
+    if key != API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
 
+    data = request.get_json()
+    if not data: return jsonify({"error": "No JSON"}), 400
 
-# 2️⃣ JSON Upload API (base64 or file path)
-class ClaimRequest(BaseModel):
-    filename: str
-    file_base64: str | None = None   # if backend sends base64 encoded PDF/image
-    file_path: str | None = None     # if backend sends existing server file path
+    if isinstance(data, dict): data = [data]
 
+    cleaned = []
+    for item in data:
+        name = item.get("person_name")
+        village = item.get("village")
+        coords = item.get("coordinates") or {}
+        lat = coords.get("lat")
+        lng = coords.get("lng")
+        area = item.get("area_ha")
+        doc = item.get("doc_url", "")
+        status = item.get("status", "pending")
+        state = item.get("state", "Telangana")
 
-@app.post("/webgis/process-json")
-async def process_json(req: ClaimRequest):
-    try:
-        if req.file_base64:
-            # Decode base64 to temporary file
-            temp_file = UPLOAD_DIR / req.filename
-            with open(temp_file, "wb") as f:
-                f.write(base64.b64decode(req.file_base64))
-            file_path = str(temp_file)
+        if (name, village) not in ALLOWED:
+            continue
+        if lat is None or lng is None: continue
 
-        elif req.file_path:
-            file_path = req.file_path  # directly use path if already on server
-        else:
-            return JSONResponse(status_code=400, content={"status": "error", "message": "No file provided"})
+        cleaned.append({
+            "person_name": name,
+            "village": village,
+            "state": state,
+            "lat": float(lat),
+            "lng": float(lng),
+            "area_ha": float(area) if area else None,
+            "status": status,
+            "doc_url": doc
+        })
 
-        result = process_file(file_path)
-        return JSONResponse(content={"status": "success", "result": result})
+    with open(DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump(cleaned, f, ensure_ascii=False, indent=2)
 
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+    logging.info(f"Saved {len(cleaned)} claims")
+    return jsonify({"status": "ok", "saved": len(cleaned)}), 200
 
+@app.route("/api/claims", methods=["GET"])
+def get_claims():
+    if os.path.exists(DATA_PATH):
+        with open(DATA_PATH, "r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    return jsonify([])
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    app.run(host="0.0.0.0", port=PORT, debug=False)

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FRA Claims Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <style>#map{height:90vh;width:100%;}</style>
+</head>
+<body>
+<h2>FRA Claims WebGIS</h2>
+<div id="map"></div>
+
+<script>
+const map = L.map('map').setView([17.95,79.6],11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+ attribution:'&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+async function loadClaims(){
+ try{
+   const res = await fetch("/api/claims");
+   const data = await res.json();
+
+   if(window.claimLayer) map.removeLayer(window.claimLayer);
+   window.claimLayer = L.layerGroup().addTo(map);
+
+   data.forEach(c=>{
+     if(c.lat==null || c.lng==null) return;
+
+     const marker = L.marker([c.lat,c.lng]).addTo(window.claimLayer);
+
+     const areaText = c.area_ha!=null? c.area_ha+" ha":"N/A";
+     const status = c.status || "pending";
+     const docLink = c.doc_url? `<a href="${c.doc_url}" target="_blank">📄 View Document</a>`:"";
+
+     marker.bindPopup(`
+       <b>${c.person_name||"Unknown"}</b><br/>
+       Village: ${c.village||"Unknown"}<br/>
+       District: Bhadradri Kothagudem<br/>
+       State: ${c.state||"Telangana"}<br/>
+       Area: ${areaText}<br/>
+       Status: ${status}<br/>
+       ${docLink}
+     `);
+   });
+ } catch(err){console.error(err);}
+}
+
+// Initial load
+loadClaims();
+
+// Poll every 10s
+let lastCount=0;
+setInterval(async()=>{
+ const res = await fetch("/api/claims");
+ const data = await res.json();
+ if(data.length>lastCount){
+   lastCount=data.length;
+   loadClaims();
+ }
+},10000);
+</script>
+</body>
+</html>
